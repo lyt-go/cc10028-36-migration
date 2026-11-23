@@ -120,6 +120,41 @@ class ExtractLineageService(BaseModuleService):
             "upstream_lineages": upstream,
         }
 
+    def trace_triple_source(self, triple_id: str, graph_file: str | None = None) -> dict[str, Any]:
+        """抽取血缘反查：通过版本化三元组来源索引读取边的完整溯源明细。
+
+        输出可核对的三层链路：图谱边 -> 关系集合（含建图期/当前校验和）->
+        关系证据行 -> 原分块。证据不完整时返回可解释的待核结论，不猜测来源。
+        """
+        from app.services.triple_source import triple_source_service
+
+        detail = triple_source_service.lineage(triple_id, graph_file=graph_file)
+        chain = []
+        if detail.get("found_in_index"):
+            edge = detail["edge"]
+            rel_set = detail["relation_set"]
+            rel_ev = detail["relation_evidence"]
+            chunks = detail["source_chunks"]
+            chain = [
+                {"level": "图谱边", "ref": triple_id,
+                 "detail": f"{edge['head']} ->[{edge['relation']}]-> {edge['tail']}",
+                 "artifact": edge["graph_file"]},
+                {"level": "关系集合", "ref": rel_set["relation_set_id"],
+                 "detail": (f"关系文件 {rel_set['relation_file']}；"
+                            f"建图期校验和={rel_set['checksum_baseline']}，"
+                            f"当前校验和={rel_set['checksum_current']}"),
+                 "artifact": rel_set["relation_file"]},
+                {"level": "关系证据", "ref": rel_ev["relation_id"] or "未核对到关系行",
+                 "detail": rel_ev["evidence_sentence"] or "无证据句子（待核）",
+                 "artifact": rel_set["relation_file"]},
+                {"level": "原分块", "ref": ", ".join(chunks["chunk_ids"]) or "未定位到分块",
+                 "detail": f"分块文件 {chunks['chunk_file'] or '不存在'}，共 {len(chunks['chunks'])} 个分块",
+                 "artifact": chunks["chunk_file"]},
+            ]
+        detail["lineage_chain"] = chain
+        detail["lineage_service"] = "extract_lineage"
+        return detail
+
     def validate_lineage_integrity(self, parse_task_key: str) -> dict[str, Any]:
         """校验血缘链路的完整性，检查各级节点是否都存在有效产物文件。"""
         parsed_file = self._data_dir("parsed") / f"{parse_task_key}_parsed.jsonl"

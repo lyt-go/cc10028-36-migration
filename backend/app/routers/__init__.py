@@ -2,5 +2,8 @@
 from __future__ import annotations
 
 from app.routers import resource
+from app.routers import triple_source
 
-ROUTERS = [resource]
+# 固定路径的 triple-source 接口必须排在通用 /api/{module} 动态路由之前，
+# 否则会被资源路由抢先匹配。
+ROUTERS = [triple_source, resource]

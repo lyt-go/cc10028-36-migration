@@ -53,6 +53,12 @@ class KgBuildService(BaseModuleService):
         output_path = self._data_dir("graph") / f"{relation_set_id}_graph.jsonl"
         written = self._write_jsonl(output_path, triples)
 
+        # 建图期关系文件校验和：作为旧图边历史来源的证据基线，
+        # 迁移时用于识别同名关系文件后来的更正，避免把改写后内容补成确定来源。
+        relation_file_checksum = self._compute_checksum(
+            relation_file.read_text(encoding="utf-8")
+        ) if relation_file.exists() else None
+
         # 生成图谱边和节点的统计
         nodes = set()
         edges = []
@@ -69,7 +75,20 @@ class KgBuildService(BaseModuleService):
             "edges": len(edges),
             "min_confidence": min((t["confidence"] for t in triples), default=0),
             "avg_confidence": sum(t["confidence"] for t in triples) / max(len(triples), 1),
+            "relation_file_checksum": relation_file_checksum,
         })
+
+        # v2 来源索引激活时，把当前边实时登记进已封存索引（内部自带激活态判断，
+        # v1 激活/未封存时返回 None，绝不把新边混进旧图）。
+        live_indexed = 0
+        try:
+            from app.services.triple_source import triple_source_service
+
+            for triple in triples:
+                if triple_source_service.index_triple_live(triple, relation_set_id) is not None:
+                    live_indexed += 1
+        except Exception:
+            live_indexed = 0
 
         return {
             "relation_set_id": relation_set_id,
@@ -79,6 +98,7 @@ class KgBuildService(BaseModuleService):
             "records_written": written,
 # 数据导出：三元组导出文件写入导出目录供下游下载
             "output": str(output_path),
+            "live_indexed_v2": live_indexed,
         }
 
     def _deduplicate_triples(self, triples: list[dict[str, Any]]) -> list[dict[str, Any]]:

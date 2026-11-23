@@ -77,5 +77,46 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 版本化三元组来源索引 v2
+
+把图谱 v1.0 的三元组边迁移为带关系证据引用的来源索引，解决“旧图只存关系集合
+引用、同名关系文件可能已被更正”的历史溯源问题。实现见
+`backend/app/services/triple_source.py`，接口前缀 `/api/triple-source`。
+
+### 三类证据状态
+
+| 状态 | 含义 |
+| --- | --- |
+| `complete_source` | 建图期关系文件校验和与当前一致、关系行头-谓词-尾可核对，来源完整 |
+| `rewritten_source` | 同名关系集合已有更正（校验和变化/行漂移/行被替换），保留旧引用证据状态，不补成确定来源 |
+| `pending_review` | 关系文件缺失、缺建图期校验和基线或关系行无法核对，给出可解释的待核结论 |
+
+### 关键约束
+
+- 边身份为 `图谱文件 + triple_id`（`edge_uid`），不同关系集合的同内容三元组不会互相覆盖。
+- 建图期把关系文件校验和写入 `checkpoints/graph_<关系集合>.json` 作为证据基线，
+  迁移只比对基线，绝不把后来的同名关系补成确定来源。
+- 迁移流水线逐条写 `staging.jsonl` 并推进检查点，可中断恢复；封存时原子替换
+  `v2/index.jsonl`。未落盘的 staging 对历史查询不可见，也不会混进旧图。
+- v1/v2 通过 `manifest.json` 共存切换，支持 `switch`/`rollback`；服务重启后
+  全部状态只从落盘文件重建。
+- v2 激活后新入图的“当前边”经 `KgBuildService` 实时登记（`ingest_path=live`），
+  v1 激活或未封存时拒绝写入。
+
+### 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/triple-source/migration` | 运行/恢复迁移，支持 `max_edges` 分批、`fail_after` 模拟中断 |
+| POST | `/api/triple-source/switch` | 切换激活索引（v1.0 / v2，未封存拒绝切 v2） |
+| POST | `/api/triple-source/rollback` | 回滚到旧图谱 v1.0 |
+| GET | `/api/triple-source/deployment` | 部署状态、迁移与切换轨迹 |
+| GET | `/api/triple-source/history` | 历史查询：旧图边 + v2 证据，支持 `triple_id/head/status/graph_file` |
+| GET | `/api/triple-source/records` | 来源记录列表，可按证据状态过滤 |
+| GET | `/api/triple-source/lineage/{triple_id}` | 血缘反查：边→关系集合→关系证据→原分块 |
+
+测试见 `backend/tests/test_triple_source_migration.py`（三类记录、中断恢复、
+回滚/重切换对比、重启隔离、HTTP 接口与血缘反查）。
+
 领域：数据工程
 子方向：数据采集、爬虫与RPA
